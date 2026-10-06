@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Miso Weather Studio</title>
+<style>
+*{box-sizing:border-box}:root{color-scheme:dark}
+body{margin:0;background:#101b2d;color:#fff1c2;font:16px/1.5 system-ui}
+header{padding:24px 32px;border-bottom:1px solid #46546c}h1{margin:0;font-size:24px}
+header p{margin:4px 0 0;color:#c2cbd8;font-size:14px}
+main{max-width:1200px;margin:auto;padding:32px;display:grid;grid-template-columns:300px minmax(0,1fr);gap:32px}
+aside{padding:24px;background:#1b2b43;border:1px solid #536078;border-radius:12px;align-self:start}
+label{display:block;margin:0 0 8px;font-weight:650}
+input{width:100%;padding:12px;font:inherit;border:1px solid #77849b;border-radius:6px;background:#101b2d;color:#fff;color-scheme:dark}
+button{width:100%;margin-top:14px;padding:13px;border:0;border-radius:7px;background:#e1b95e;color:#18253a;font:700 15px system-ui;cursor:pointer}
+button.alt{background:transparent;color:#e1b95e;border:1px solid #e1b95e}button:disabled{opacity:.5;cursor:default}
+p,small{font-size:14px;color:#c2cbd8}
+.card{background:#1b2b43;border:1px solid #536078;border-radius:12px;padding:20px 24px;margin-bottom:16px}
+.card h2{margin:0 0 6px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#e1b95e}
+.big{font-size:22px;font-weight:700;color:#fff}.nws{color:#c2cbd8;font-size:14px}
+.alert{border-color:#e0694f;background:#3a1f22}.alert h2{color:#ff9d86}
+table{width:100%;border-collapse:collapse}td{padding:6px 0;border-top:1px solid #33435c}td:last-child{text-align:right;font-weight:700;color:#fff}
+.meta{font-size:13px;color:#b7c3d4}pre{white-space:pre-wrap;font-size:13px;color:#c2cbd8}
+#status{min-height:1.5em}a{color:#e1b95e}
+:focus-visible{outline:3px solid #fff1c2;outline-offset:3px}
+@media(max-width:860px){main{grid-template-columns:1fr;padding:16px}header{padding:20px 16px}}
+</style>
+<header><h1>⚓ Miso · Weather Studio</h1><p>The data source behind each Weather or Not script.</p></header>
+<main>
+<aside>
+  <label for="date">Episode date</label>
+  <input id="date" type="date">
+  <button id="get">Get weather</button>
+  <button id="save" class="alt" disabled>Save to weather log</button>
+  <button id="copy" class="alt" disabled>Copy brief for script</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <p id="where"></p>
+  <small>Defaults to tomorrow. Numbers from <a href="https://open-meteo.com/">Open-Meteo</a>; condition wording and alerts from the <a href="https://www.weather.gov/">National Weather Service</a> when the date is within its 7-day window. A Massive Vivid Pictures tool for <a href="https://www.youtube.com/@Weatherornot-miso">Weather or Not with Miso</a>.</small>
+</aside>
+<section id="out" aria-live="polite"></section>
+</main>
+<script>
+// Runs entirely in the browser (works opened as a file, served locally, or embedded).
+// Mirrors tools/weather-studio/miso_weather.py — keep the two in step.
+let CFG={location:'Dane County Regional Airport (KMSN), Madison, Wisconsin',latitude:43.1399,longitude:-89.3375,timezone:'America/Chicago'};
+let SERVER=false;
+const CODES={0:'Clear',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',48:'Freezing fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',56:'Light freezing drizzle',57:'Freezing drizzle',61:'Light rain',63:'Rain',65:'Heavy rain',66:'Light freezing rain',67:'Freezing rain',71:'Light snow',73:'Snow',75:'Heavy snow',77:'Snow grains',80:'Light rain showers',81:'Rain showers',82:'Heavy rain showers',85:'Light snow showers',86:'Heavy snow showers',95:'Thunderstorms',96:'Thunderstorms with hail',99:'Thunderstorms with heavy hail'};
+const FIELDS=['pulled_at','target_date','target_weekday','location','latitude','longitude','timezone','sunrise','temp_7am_f','today_conditions','today_conditions_nws','today_high_f','today_precip_chance_pct','today_precip_in','today_wind_max_mph','today_gust_max_mph','today_uv_max','tonight_conditions','tonight_conditions_nws','sunset','tonight_low_f','tomorrow_date','tomorrow_weekday','tomorrow_conditions','tomorrow_conditions_nws','tomorrow_high_f','tomorrow_low_f'];
+for(let n=1;n<=5;n++)FIELDS.push(`day${n}_date`,`day${n}_weekday`,`day${n}_conditions`,`day${n}_conditions_nws`,`day${n}_high_f`);
+FIELDS.push('alerts_status','alerts_count','alerts','today_detail_nws','tonight_detail_nws','numbers_source','text_and_alerts_source','source_url','notes');
+
+const $=id=>document.getElementById(id);let last=null;
+const add=(iso,n)=>{const d=new Date(iso+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
+const weekday=iso=>new Date(iso+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'long',timeZone:'UTC'});
+const rnd=v=>v==null?'':Math.round(v);
+const clock=iso=>{if(!iso)return'';let[h,m]=iso.slice(11,16).split(':').map(Number);return`${h%12||12}:${String(m).padStart(2,'0')} ${h<12?'AM':'PM'}`};
+const todayIn=tz=>new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+function nowIso(tz){const d=new Date(),p={};for(const x of new Intl.DateTimeFormat('en-US',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'longOffset'}).formatToParts(d))p[x.type]=x.value;
+ const off=(p.timeZoneName||'GMT').replace('GMT','')||'+00:00';return`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${off}`}
+function describe(codes){codes=codes.filter(c=>c!=null);if(!codes.length)return'';const wet=codes.filter(c=>c>=45);let pick;
+ if(wet.length)pick=Math.max(...wet);else{const n={};codes.forEach(c=>n[c]=(n[c]||0)+1);pick=+Object.keys(n).sort((a,b)=>n[b]-n[a])[0]}return CODES[pick]||`Code ${pick}`}
+async function getJSON(url,nws){const r=await fetch(url,{headers:nws?{Accept:'application/geo+json'}:{}});if(!r.ok)throw Error(`${new URL(url).host} answered ${r.status}`);return r.json()}
+
+async function build(T){
+ const c=CFG,today=todayIn(c.timezone);T=T||add(today,1);
+ if(T>add(today,14))throw Error(`Forecasts only reach ${add(today,14)}; pick an earlier date.`);
+ const end=add(T,6)<add(today,15)?add(T,6):add(today,15);
+ const hist=T<add(today,-90);
+ const params=new URLSearchParams({latitude:c.latitude,longitude:c.longitude,timezone:c.timezone,temperature_unit:'fahrenheit',wind_speed_unit:'mph',precipitation_unit:'inch',start_date:T,end_date:end,
+  daily:'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,uv_index_max',hourly:'temperature_2m,weather_code'});
+ const url=(hist?'https://historical-forecast-api.open-meteo.com/v1/forecast':'https://api.open-meteo.com/v1/forecast')+'?'+params;
+ let om;try{om=await getJSON(url)}catch(e){throw Error('Could not reach Open-Meteo ('+e.message+'). Check the internet connection.')}
+ const d=om.daily,h=om.hourly,days={},hours={},notes=[];d.time.forEach((t,i)=>days[t]=i);h.time.forEach((t,i)=>hours[t]=i);
+ const T1=add(T,1);if(!(T in days)||!(T1 in days))throw Error(`Provider did not return ${T} and ${T1}`);
+ const dv=(k,day)=>d[k]&&day in days?d[k][days[day]]:null;
+ const hourly=(k,startDay,startH,count)=>{const out=[];for(let i=0;i<count;i++){const hh=startH+i,day=add(startDay,Math.floor(hh/24)),key=`${day}T${String(hh%24).padStart(2,'0')}:00`;if(key in hours)out.push(h[k][hours[key]])}return out};
+ const seven=hourly('temperature_2m',T,7,1);
+ const nightT=hourly('temperature_2m',T,19,13).filter(v=>v!=null);
+ const nightC=hourly('weather_code',T,19,12);
+ let periods=[],alerts=[],status;
+ const live=T>=today&&T<=add(today,6);
+ if(live){try{const pt=`${(+c.latitude).toFixed(4)},${(+c.longitude).toFixed(4)}`;
+   const meta=await getJSON(`https://api.weather.gov/points/${pt}`,1);
+   periods=(await getJSON(meta.properties.forecast,1)).properties.periods;
+   alerts=(await getJSON(`https://api.weather.gov/alerts/active?point=${pt}`,1)).features;status='checked'}
+  catch(e){status='unavailable';notes.push('NWS unavailable: '+e.message)}}
+ else status='not applicable (date outside live forecast window)';
+ const per=(day,dayTime)=>periods.find(p=>p.startTime.slice(0,10)===day&&p.isDaytime===dayTime);
+ const nt=(day,dayTime,f='shortForecast')=>(per(day,dayTime)||{})[f]||'';
+ const dayStart=new Date(T+'T00:00:00'+nowIso(c.timezone).slice(19));
+ const active=[];for(const f of alerts){const p=f.properties||f,until=p.ends||p.expires;if(until&&new Date(until)<dayStart)continue;
+  active.push({event:p.event||'',severity:p.severity||'',headline:p.headline||'',onset:p.onset||p.effective||'',ends:until||'',description:p.description||'',instruction:p.instruction||''})}
+ const r={};FIELDS.forEach(k=>r[k]='');
+ Object.assign(r,{pulled_at:nowIso(c.timezone),target_date:T,target_weekday:weekday(T),location:c.location,latitude:c.latitude,longitude:c.longitude,timezone:c.timezone,
+  sunrise:clock(dv('sunrise',T)),temp_7am_f:rnd(seven[0]),
+  today_conditions:CODES[dv('weather_code',T)]||'',today_conditions_nws:nt(T,true),today_high_f:rnd(dv('temperature_2m_max',T)),
+  today_precip_chance_pct:rnd(dv('precipitation_probability_max',T)),today_precip_in:dv('precipitation_sum',T)==null?'':Math.round(dv('precipitation_sum',T)*100)/100,
+  today_wind_max_mph:rnd(dv('wind_speed_10m_max',T)),today_gust_max_mph:rnd(dv('wind_gusts_10m_max',T)),today_uv_max:dv('uv_index_max',T)==null?'':Math.round(dv('uv_index_max',T)*10)/10,
+  tonight_conditions:describe(nightC),tonight_conditions_nws:nt(T,false),sunset:clock(dv('sunset',T)),tonight_low_f:rnd(nightT.length?Math.min(...nightT):null),
+  tomorrow_date:T1,tomorrow_weekday:weekday(T1),tomorrow_conditions:CODES[dv('weather_code',T1)]||'',tomorrow_conditions_nws:nt(T1,true),
+  tomorrow_high_f:rnd(dv('temperature_2m_max',T1)),tomorrow_low_f:rnd(dv('temperature_2m_min',T1)),
+  alerts_status:status,alerts_count:status==='checked'?active.length:'',alerts:active.map(a=>`${a.event}: ${a.headline}`).join(' | '),
+  today_detail_nws:nt(T,true,'detailedForecast'),tonight_detail_nws:nt(T,false,'detailedForecast'),
+  numbers_source:'Open-Meteo'+(hist?' historical forecast':''),text_and_alerts_source:status==='checked'?'National Weather Service (api.weather.gov)':'',source_url:url});
+ for(let n=1;n<=5;n++){const day=add(T,n);r[`day${n}_date`]=day;r[`day${n}_weekday`]=weekday(day);
+  if(day in days){r[`day${n}_conditions`]=CODES[dv('weather_code',day)]||'';r[`day${n}_conditions_nws`]=nt(day,true);r[`day${n}_high_f`]=rnd(dv('temperature_2m_max',day))}
+  else notes.push(`${day} is beyond the 16-day forecast range`)}
+ r.notes=notes.join('; ');
+ return{row:r,alerts:active,text:asText(r,active)}}
+
+function asText(r,alerts){const cond=(a,b)=>b?`${a} (NWS: ${b})`:(a||'n/a');
+ const dd=new Date(r.target_date+'T12:00:00Z').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric',timeZone:'UTC'});
+ const q={};for(const x of new Intl.DateTimeFormat('en-US',{timeZone:r.timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:true,timeZoneName:'short'}).formatToParts(new Date(r.pulled_at)))q[x.type]=x.value;
+ const pulled=`${q.year}-${q.month}-${q.day} ${q.hour}:${q.minute} ${q.dayPeriod} ${q.timeZoneName}`;
+ const L=[`MISO WEATHER BRIEF — ${r.target_weekday}, ${dd}`,`Location: ${r.location} (${r.latitude}, ${r.longitude})`,
+  `Pulled: ${pulled} · Numbers: ${r.numbers_source}`+(r.text_and_alerts_source?` · Text and alerts: ${r.text_and_alerts_source}`:''),'',
+  `1. MORNING — Sunrise ${r.sunrise} · 7 AM temperature ${r.temp_7am_f}°F`,
+  `2. TODAY — ${cond(r.today_conditions,r.today_conditions_nws)} · High ${r.today_high_f}°F`+(r.today_precip_chance_pct!==''?` · Rain chance ${r.today_precip_chance_pct}%`:'')+(r.today_wind_max_mph!==''?` · Wind to ${r.today_wind_max_mph} mph, gusts ${r.today_gust_max_mph} mph`:''),
+  `3. TONIGHT — ${cond(r.tonight_conditions,r.tonight_conditions_nws)} · Sunset ${r.sunset} · Low ${r.tonight_low_f}°F`,
+  `4. TOMORROW (${r.tomorrow_weekday}) — ${cond(r.tomorrow_conditions,r.tomorrow_conditions_nws)} · High ${r.tomorrow_high_f}°F / Low ${r.tomorrow_low_f}°F`,'5. NEXT 5 DAYS —'];
+ for(let n=1;n<=5;n++)L.push(r[`day${n}_high_f`]===''?`   ${r[`day${n}_weekday`]} ${r[`day${n}_date`]}: not available yet`:`   ${r[`day${n}_weekday`]} ${r[`day${n}_date`]}: ${cond(r[`day${n}_conditions`],r[`day${n}_conditions_nws`])}, high ${r[`day${n}_high_f`]}°F`);
+ if(alerts.length){L.push('6. ALERTS —');alerts.forEach(a=>L.push(`   ${a.event} (${a.severity}): ${a.headline}`))}
+ else if(r.alerts_status!=='checked')L.push(`(Alerts not checked: ${r.alerts_status})`);
+ if(r.today_detail_nws||r.tonight_detail_nws)L.push('','NWS detail, today: '+r.today_detail_nws,'NWS detail, tonight: '+r.tonight_detail_nws);
+ if(r.notes)L.push('','Notes: '+r.notes);return L.join('\n')+'\n'}
+
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cond=(a,b)=>esc(a||'n/a')+(b?`<div class="nws">NWS: ${esc(b)}</div>`:'');
+const deg=v=>v===''||v==null?'—':v+'°F';
+function render(rep){const r=rep.row;last=rep;
+ const d=new Date(r.target_date+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric',timeZone:'UTC'});
+ let days='';for(let n=1;n<=5;n++)days+=`<tr><td>${esc(r['day'+n+'_weekday'])} <span class="meta">${esc(r['day'+n+'_date'])}</span><div class="nws">${esc(r['day'+n+'_conditions']||'not available yet')}${r['day'+n+'_conditions_nws']?' · NWS: '+esc(r['day'+n+'_conditions_nws']):''}</div></td><td>${deg(r['day'+n+'_high_f'])}</td></tr>`;
+ let alerts='';
+ if(rep.alerts.length)alerts=`<div class="card alert"><h2>6 · Alerts</h2>${rep.alerts.map(a=>`<p class="big" style="font-size:17px">${esc(a.event)} <span class="meta">${esc(a.severity)}</span></p><p>${esc(a.headline)}</p>`).join('')}</div>`;
+ else if(r.alerts_status!=='checked')alerts=`<p class="meta">Alerts not checked: ${esc(r.alerts_status)}</p>`;
+ $('out').innerHTML=`
+ <div class="card"><div class="big" style="font-size:26px">${esc(d)}</div>
+  <div class="meta">${esc(r.location)} (${esc(r.latitude)}, ${esc(r.longitude)}) · pulled ${esc(r.pulled_at)} · ${esc(r.numbers_source)}${r.text_and_alerts_source?' + '+esc(r.text_and_alerts_source):''}</div></div>
+ <div class="card"><h2>1 · Morning</h2><div class="big">Sunrise ${esc(r.sunrise)} · ${deg(r.temp_7am_f)} at 7 AM</div></div>
+ <div class="card"><h2>2 · Today</h2><div class="big">${cond(r.today_conditions,r.today_conditions_nws)}</div>
+  <div>High ${deg(r.today_high_f)}${r.today_precip_chance_pct!==''?' · Rain chance '+r.today_precip_chance_pct+'%':''}${r.today_wind_max_mph!==''?' · Wind to '+r.today_wind_max_mph+' mph':''}</div>
+  ${r.today_detail_nws?`<p>${esc(r.today_detail_nws)}</p>`:''}</div>
+ <div class="card"><h2>3 · Tonight</h2><div class="big">${cond(r.tonight_conditions,r.tonight_conditions_nws)}</div>
+  <div>Sunset ${esc(r.sunset)} · Low ${deg(r.tonight_low_f)}</div>${r.tonight_detail_nws?`<p>${esc(r.tonight_detail_nws)}</p>`:''}</div>
+ <div class="card"><h2>4 · Tomorrow · ${esc(r.tomorrow_weekday)}</h2><div class="big">${cond(r.tomorrow_conditions,r.tomorrow_conditions_nws)}</div>
+  <div>High ${deg(r.tomorrow_high_f)} / Low ${deg(r.tomorrow_low_f)}</div></div>
+ <div class="card"><h2>5 · Next 5 days</h2><table>${days}</table></div>
+ ${alerts}
+ ${r.notes?`<p class="meta">Notes: ${esc(r.notes)}</p>`:''}
+ <div class="card"><h2>Brief for the script LLM</h2><pre>${esc(rep.text)}</pre></div>`;
+ $('save').disabled=$('copy').disabled=false}
+
+async function get(){$('status').textContent='Pulling weather…';$('get').disabled=$('save').disabled=true;
+ try{render(await build($('date').value));$('status').textContent='Ready. Not saved yet.'}
+ catch(e){$('status').textContent='Error: '+e.message}finally{$('get').disabled=false}}
+const csvCell=v=>{v=String(v??'');return/[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+async function save(){if(!last)return;
+ if(SERVER){try{const r=await fetch('/api/save-row',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(last)});const j=await r.json();if(!r.ok)throw Error(j.error);$('status').textContent='Saved. Row added to '+j.log;return}
+  catch(e){$('status').textContent='Save failed: '+e.message;return}}
+ const csv=FIELDS.join(',')+'\n'+FIELDS.map(k=>csvCell(last.row[k])).join(',')+'\n';
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`miso-weather-${last.row.target_date}.csv`;a.click();
+ setTimeout(()=>URL.revokeObjectURL(a.href),1000);$('status').textContent='Downloaded a CSV row (same columns as the weather log).'}
+$('get').onclick=get;$('save').onclick=save;$('date').onchange=()=>{$('save').disabled=true};
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText(last.text);$('status').textContent='Brief copied.'}catch{$('status').textContent='Copy failed; select the text below.'}};
+(async()=>{try{if(location.protocol.startsWith('http')){const r=await fetch('/api/config');if(r.ok){Object.assign(CFG,await r.json());SERVER=true}}}catch{}
+ $('date').value=add(todayIn(CFG.timezone),1);
+ $('where').textContent='Location: '+CFG.location+(SERVER?'. Saving adds a row to the weather log.':'. Saving downloads a CSV row.');get()})();
+</script>
