@@ -6,7 +6,7 @@
 <style>
 *{box-sizing:border-box}:root{color-scheme:dark}
 body{margin:0;background:#101b2d;color:#fff1c2;font:16px/1.5 system-ui}
-header{padding:24px 32px;border-bottom:1px solid #46546c}h1{margin:0;font-size:24px}
+header{padding:24px 32px;border-bottom:1px solid #46546c}h1{margin:0;font-size:24px;display:flex;align-items:center;gap:12px}.avatar{width:44px;height:44px;border-radius:50%;border:2px solid #e1b95e;flex:none}
 header p{margin:4px 0 0;color:#c2cbd8;font-size:14px}
 main{max-width:1200px;margin:auto;padding:32px;display:grid;grid-template-columns:300px minmax(0,1fr);gap:32px}
 aside{padding:24px;background:#1b2b43;border:1px solid #536078;border-radius:12px;align-self:start}
@@ -25,7 +25,7 @@ table{width:100%;border-collapse:collapse}td{padding:6px 0;border-top:1px solid 
 :focus-visible{outline:3px solid #fff1c2;outline-offset:3px}
 @media(max-width:860px){main{grid-template-columns:1fr;padding:16px}header{padding:20px 16px}}
 </style>
-<header><h1>⚓ Miso · Weather Studio</h1><p>The data source behind each Weather or Not script.</p></header>
+<header><h1><img class="avatar" src="miso-avatar.png" alt="First Mate Miso" width="44" height="44">Miso · Weather Studio</h1><p>The data source behind each Weather or Not script.</p></header>
 <main>
 <aside>
   <label for="date">Episode date</label>
@@ -35,7 +35,7 @@ table{width:100%;border-collapse:collapse}td{padding:6px 0;border-top:1px solid 
   <button id="copy" class="alt" disabled>Copy brief for script</button>
   <p id="status" role="status" aria-live="polite"></p>
   <p id="where"></p>
-  <small>Defaults to tomorrow. Numbers from <a href="https://open-meteo.com/">Open-Meteo</a>; condition wording and alerts from the <a href="https://www.weather.gov/">National Weather Service</a> when the date is within its 7-day window. A Massive Vivid Pictures tool for <a href="https://www.youtube.com/@Weatherornot-miso">Weather or Not with Miso</a>.</small>
+  <small>Defaults to tomorrow. Numbers from <a href="https://open-meteo.com/">Open-Meteo</a>; the main condition wording and alerts come from the <a href="https://www.weather.gov/">National Weather Service</a> when the date is within its 7-day window. A Massive Vivid Pictures tool for <a href="https://www.youtube.com/@Weatherornot-miso">Weather or Not with Miso</a>.</small>
 </aside>
 <section id="out" aria-live="polite"></section>
 </main>
@@ -57,8 +57,10 @@ const clock=iso=>{if(!iso)return'';let[h,m]=iso.slice(11,16).split(':').map(Numb
 const todayIn=tz=>new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function nowIso(tz){const d=new Date(),p={};for(const x of new Intl.DateTimeFormat('en-US',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'longOffset'}).formatToParts(d))p[x.type]=x.value;
  const off=(p.timeZoneName||'GMT').replace('GMT','')||'+00:00';return`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}${off}`}
-function describe(codes){codes=codes.filter(c=>c!=null);if(!codes.length)return'';const wet=codes.filter(c=>c>=45);let pick;
- if(wet.length)pick=Math.max(...wet);else{const n={};codes.forEach(c=>n[c]=(n[c]||0)+1);pick=+Object.keys(n).sort((a,b)=>n[b]-n[a])[0]}return CODES[pick]||`Code ${pick}`}
+function describe(codes){codes=codes.filter(c=>c!=null);if(!codes.length)return'';
+ // Rain, snow, fog or storms lead only if they last 3+ hours; otherwise the most common sky.
+ const common=xs=>{const n={};xs.forEach(c=>n[c]=(n[c]||0)+1);return Math.max(...Object.keys(n).map(Number).filter(c=>n[c]===Math.max(...Object.values(n))))};
+ const wet=codes.filter(c=>c>=45),dry=codes.filter(c=>c<45);const pick=wet.length>=3?common(wet):common(dry.length?dry:codes);return CODES[pick]||`Code ${pick}`}
 async function getJSON(url,nws){const r=await fetch(url,{headers:nws?{Accept:'application/geo+json'}:{}});if(!r.ok)throw Error(`${new URL(url).host} answered ${r.status}`);return r.json()}
 
 async function build(T){
@@ -77,6 +79,7 @@ async function build(T){
  const seven=hourly('temperature_2m',T,7,1);
  const nightT=hourly('temperature_2m',T,19,13).filter(v=>v!=null);
  const nightC=hourly('weather_code',T,19,12);
+ const dayCond=day=>describe(hourly('weather_code',day,7,12))||CODES[dv('weather_code',day)]||'';
  let periods=[],alerts=[],status;
  const live=T>=today&&T<=add(today,6);
  if(live){try{const pt=`${(+c.latitude).toFixed(4)},${(+c.longitude).toFixed(4)}`;
@@ -93,22 +96,22 @@ async function build(T){
  const r={};FIELDS.forEach(k=>r[k]='');
  Object.assign(r,{pulled_at:nowIso(c.timezone),target_date:T,target_weekday:weekday(T),location:c.location,latitude:c.latitude,longitude:c.longitude,timezone:c.timezone,
   sunrise:clock(dv('sunrise',T)),temp_7am_f:rnd(seven[0]),
-  today_conditions:CODES[dv('weather_code',T)]||'',today_conditions_nws:nt(T,true),today_high_f:rnd(dv('temperature_2m_max',T)),
+  today_conditions:dayCond(T),today_conditions_nws:nt(T,true),today_high_f:rnd(dv('temperature_2m_max',T)),
   today_precip_chance_pct:rnd(dv('precipitation_probability_max',T)),today_precip_in:dv('precipitation_sum',T)==null?'':Math.round(dv('precipitation_sum',T)*100)/100,
   today_wind_max_mph:rnd(dv('wind_speed_10m_max',T)),today_gust_max_mph:rnd(dv('wind_gusts_10m_max',T)),today_uv_max:dv('uv_index_max',T)==null?'':Math.round(dv('uv_index_max',T)*10)/10,
   tonight_conditions:describe(nightC),tonight_conditions_nws:nt(T,false),sunset:clock(dv('sunset',T)),tonight_low_f:rnd(nightT.length?Math.min(...nightT):null),
-  tomorrow_date:T1,tomorrow_weekday:weekday(T1),tomorrow_conditions:CODES[dv('weather_code',T1)]||'',tomorrow_conditions_nws:nt(T1,true),
+  tomorrow_date:T1,tomorrow_weekday:weekday(T1),tomorrow_conditions:dayCond(T1),tomorrow_conditions_nws:nt(T1,true),
   tomorrow_high_f:rnd(dv('temperature_2m_max',T1)),tomorrow_low_f:rnd(dv('temperature_2m_min',T1)),
   alerts_status:status,alerts_count:status==='checked'?active.length:'',alerts:active.map(a=>`${a.event}: ${a.headline}`).join(' | '),
   today_detail_nws:nt(T,true,'detailedForecast'),tonight_detail_nws:nt(T,false,'detailedForecast'),
   numbers_source:'Open-Meteo'+(hist?' historical forecast':''),text_and_alerts_source:status==='checked'?'National Weather Service (api.weather.gov)':'',source_url:url});
  for(let n=1;n<=5;n++){const day=add(T,n);r[`day${n}_date`]=day;r[`day${n}_weekday`]=weekday(day);
-  if(day in days){r[`day${n}_conditions`]=CODES[dv('weather_code',day)]||'';r[`day${n}_conditions_nws`]=nt(day,true);r[`day${n}_high_f`]=rnd(dv('temperature_2m_max',day))}
+  if(day in days){r[`day${n}_conditions`]=dayCond(day);r[`day${n}_conditions_nws`]=nt(day,true);r[`day${n}_high_f`]=rnd(dv('temperature_2m_max',day))}
   else notes.push(`${day} is beyond the 16-day forecast range`)}
  r.notes=notes.join('; ');
  return{row:r,alerts:active,text:asText(r,active)}}
 
-function asText(r,alerts){const cond=(a,b)=>b?`${a} (NWS: ${b})`:(a||'n/a');
+function asText(r,alerts){const cond=(a,b)=>b?`${b} (Open-Meteo: ${a})`:(a||'n/a');
  const dd=new Date(r.target_date+'T12:00:00Z').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric',timeZone:'UTC'});
  const q={};for(const x of new Intl.DateTimeFormat('en-US',{timeZone:r.timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:true,timeZoneName:'short'}).formatToParts(new Date(r.pulled_at)))q[x.type]=x.value;
  const pulled=`${q.year}-${q.month}-${q.day} ${q.hour}:${q.minute} ${q.dayPeriod} ${q.timeZoneName}`;
@@ -125,11 +128,11 @@ function asText(r,alerts){const cond=(a,b)=>b?`${a} (NWS: ${b})`:(a||'n/a');
  if(r.notes)L.push('','Notes: '+r.notes);return L.join('\n')+'\n'}
 
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const cond=(a,b)=>esc(a||'n/a')+(b?`<div class="nws">NWS: ${esc(b)}</div>`:'');
+const cond=(a,b)=>b?esc(b)+`<div class="nws">Open-Meteo: ${esc(a||'n/a')}</div>`:esc(a||'n/a');
 const deg=v=>v===''||v==null?'—':v+'°F';
 function render(rep){const r=rep.row;last=rep;
  const d=new Date(r.target_date+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric',timeZone:'UTC'});
- let days='';for(let n=1;n<=5;n++)days+=`<tr><td>${esc(r['day'+n+'_weekday'])} <span class="meta">${esc(r['day'+n+'_date'])}</span><div class="nws">${esc(r['day'+n+'_conditions']||'not available yet')}${r['day'+n+'_conditions_nws']?' · NWS: '+esc(r['day'+n+'_conditions_nws']):''}</div></td><td>${deg(r['day'+n+'_high_f'])}</td></tr>`;
+ let days='';for(let n=1;n<=5;n++)days+=`<tr><td>${esc(r['day'+n+'_weekday'])} <span class="meta">${esc(r['day'+n+'_date'])}</span><div class="nws">${r['day'+n+'_conditions_nws']?esc(r['day'+n+'_conditions_nws'])+' · Open-Meteo: '+esc(r['day'+n+'_conditions']):esc(r['day'+n+'_conditions']||'not available yet')}</div></td><td>${deg(r['day'+n+'_high_f'])}</td></tr>`;
  let alerts='';
  if(rep.alerts.length)alerts=`<div class="card alert"><h2>6 · Alerts</h2>${rep.alerts.map(a=>`<p class="big" style="font-size:17px">${esc(a.event)} <span class="meta">${esc(a.severity)}</span></p><p>${esc(a.headline)}</p>`).join('')}</div>`;
  else if(r.alerts_status!=='checked')alerts=`<p class="meta">Alerts not checked: ${esc(r.alerts_status)}</p>`;
